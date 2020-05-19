@@ -6,6 +6,7 @@ from timeit import default_timer as timer
 
 import aiohttp
 import dataset
+import numpy as np
 
 ITEM_LIST_API = 'https://rsbuddy.com/exchange/summary.json'
 ITEM_PRICE_API = 'https://services.runescape.com/m=itemdb_oldschool/api/graph/%s.json'
@@ -27,12 +28,12 @@ async def fetch_item_data(session, url, item_id):
     volumes = [ vol for _, vol in parse_item_volumes(raw_html) ]
 
     data = [ (price[0], price[1], vol) for price, vol in zip(prices, volumes) ]
-    print(data)
     return (item_id, data)
 
 async def fetch(session, url):
     async with session.get(url) as resp:
         resp.raise_for_status()
+        print(f'Status: {resp.status}')
         return await resp.text()
 
 async def get_item_list(session):
@@ -43,16 +44,23 @@ async def get_item_list(session):
 async def fetch_bucket(session, bucket):
     while True:
         try:
-            return await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
+            data = await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
                     item in bucket ])
+
+            # Hacky way of detecting that ge site is ratelimiting us
+            assert [] not in [ result for _, result in data ]
+            return data
         except aiohttp.ClientResponseError as e:
             print('Request failed: e.message')
-            print('Trying again in 30 seconds..')
+            print('Trying again in 1 minute..')
+            await asyncio.sleep(30)
+        except AssertionError:
+            print('Rate limited. Waiting for 1 minute.')
             await asyncio.sleep(30)
 
 async def main():
     bucket_size = 5
-    sleep_time = 10
+    sleep_time_mean = 10
 
     database = dataset.connect('sqlite:///osrs_prices.db')
 
@@ -66,12 +74,9 @@ async def main():
 
         for bucket_no, bucket in enumerate(buckets):
             start = timer()
-            print(bucket)
-            #bucket_data = await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
-            #    item in bucket ])
             bucket_data = await fetch_bucket(session, bucket)
             elapsed = timer() - start
-            est_time_left = (len(buckets) - bucket_no) * ((elapsed) + sleep_time)
+            est_time_left = (len(buckets) - bucket_no) * ((elapsed) + sleep_time_mean)
             print(f'Fetched bucket {bucket_no}/{len(buckets)} in {elapsed*1000:.2f} ms. '
                 f'Est time left: {est_time_left/60:.2f} min')
 
@@ -79,7 +84,7 @@ async def main():
                 [ database[item_id].insert({'timestamp': ts, 'price': price, 'vol': vol}) for ts, price, vol in data ]
 
             print(f'Wrote bucket {bucket_no} to database.')
-            await asyncio.sleep(sleep_time)
+            await asyncio.sleep(np.random.normal(sleep_time_mean, 2))
 
 if __name__ == '__main__':
     asyncio.run(main())
