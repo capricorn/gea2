@@ -1,5 +1,7 @@
 import asyncio
 import json
+import re
+import datetime
 from timeit import default_timer as timer
 
 import aiohttp
@@ -7,20 +9,33 @@ import dataset
 
 ITEM_LIST_API = 'https://rsbuddy.com/exchange/summary.json'
 ITEM_PRICE_API = 'https://services.runescape.com/m=itemdb_oldschool/api/graph/%s.json'
+ITEM_DATA_URL = 'http://services.runescape.com/m=itemdb_oldschool/viewitem?obj=%s'
 
-# Return 180 daily item prices, starting from today
-async def fetch_item_prices(session, url, item_id):
-    prices = await fetch(session, url)
-    prices = prices['daily']
-    return (item_id, prices)
+def parse_item_prices(html):
+    prices = re.findall("(?<=average180\.push\(\[new Date\(\'(\d{4}\/\d{2}\/\d{2})\'\), )(\d+)", html)
+    return [ (int(datetime.datetime.strptime(date, '%Y/%m/%d').timestamp()), price) for date, price in prices ]
+
+def parse_item_volumes(html):
+    volumes = re.findall("(?<=trade180\.push\(\[new Date\(\'(\d{4}\/\d{2}\/\d{2})\'\), )(\d+)", html)
+    return [ (int(datetime.datetime.strptime(date, '%Y/%m/%d').timestamp()), vol) for date, vol in volumes ]
+
+# Return 180 daily item prices, starting from today, in form (timestamp, price, volume)
+async def fetch_item_data(session, url, item_id):
+    raw_html = await fetch(session, url)
+    prices = parse_item_prices(raw_html)
+    # For now, discard timestamps -- should be equivalent to prices anyways
+    volumes = [ vol for _, vol in parse_item_volumes(raw_html) ]
+
+    data = [ (price[0], price[1], vol) for price, vol in zip(prices, volumes) ]
+    return (item_id, data)
 
 async def fetch(session, url):
     async with session.get(url) as resp:
-        return json.loads(await resp.text())
+        return await resp.text()
 
 async def get_item_list(session):
     items = await fetch(session, ITEM_LIST_API)
-    items = list(items.keys())
+    items = list(json.loads(items).keys())
     return items
 
 '''
@@ -45,7 +60,8 @@ async def main():
 
         for bucket_no, bucket in enumerate(buckets):
             start = timer()
-            bucket_data = await asyncio.gather(*[ fetch_item_prices(session, ITEM_PRICE_API % item, item) for 
+            print(bucket)
+            bucket_data = await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
                 item in bucket ])
             elapsed = timer() - start
             est_time_left = (len(buckets) - bucket_no) * ((elapsed) + sleep_time)
@@ -53,9 +69,10 @@ async def main():
                 f'Est time left: {est_time_left/60:.2f} min')
 
             for item_id, data in bucket_data:
-                [ database[item_id].insert({'timestamp': ts, 'price': price}) for ts, price in data.items() ]
+                [ database[item_id].insert({'timestamp': ts, 'price': price, 'vol': vol}) for ts, price, vol in data ]
 
             print(f'Wrote bucket {bucket_no} to database.')
             await asyncio.sleep(sleep_time)
 
-asyncio.run(main())
+if __name__ == '__main__':
+    asyncio.run(main())
