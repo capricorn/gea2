@@ -33,7 +33,6 @@ async def fetch_item_data(session, url, item_id):
 async def fetch(session, url):
     async with session.get(url) as resp:
         resp.raise_for_status()
-        print(f'Status: {resp.status}')
         return await resp.text()
 
 async def get_item_list(session):
@@ -53,10 +52,10 @@ async def fetch_bucket(session, bucket):
         except aiohttp.ClientResponseError as e:
             print('Request failed: e.message')
             print('Trying again in 1 minute..')
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
         except AssertionError:
             print('Rate limited. Waiting for 1 minute.')
-            await asyncio.sleep(30)
+            await asyncio.sleep(60)
 
 async def main():
     bucket_size = 5
