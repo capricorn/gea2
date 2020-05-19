@@ -32,6 +32,7 @@ async def fetch_item_data(session, url, item_id):
 
 async def fetch(session, url):
     async with session.get(url) as resp:
+        resp.raise_for_status()
         return await resp.text()
 
 async def get_item_list(session):
@@ -39,19 +40,23 @@ async def get_item_list(session):
     items = list(json.loads(items).keys())
     return items
 
-'''
-Basic idea:
-    - Table for each item
-    - Each table contains timestamp, price for daily return
-'''
+async def fetch_bucket(session, bucket):
+    while True:
+        try:
+            return await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
+                    item in bucket ])
+        except aiohttp.ClientResponseError as e:
+            print('Request failed: e.message')
+            print('Trying again in 30 seconds..')
+            await asyncio.sleep(30)
 
 async def main():
-    bucket_size = 10
+    bucket_size = 5
     sleep_time = 10
 
     database = dataset.connect('sqlite:///osrs_prices.db')
 
-    async with aiohttp.ClientSession(requote_redirect_url=False) as session:
+    async with aiohttp.ClientSession(requote_redirect_url=False, raise_for_status=True) as session:
         items = await get_item_list(session)
         buckets = [ items[i:i+bucket_size] for i in range(0, len(items) - len(items)%bucket_size, bucket_size) ]
         if len(items) % bucket_size != 0:
@@ -62,8 +67,9 @@ async def main():
         for bucket_no, bucket in enumerate(buckets):
             start = timer()
             print(bucket)
-            bucket_data = await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
-                item in bucket ])
+            #bucket_data = await asyncio.gather(*[ fetch_item_data(session, ITEM_DATA_URL % item, item) for 
+            #    item in bucket ])
+            bucket_data = await fetch_bucket(session, bucket)
             elapsed = timer() - start
             est_time_left = (len(buckets) - bucket_no) * ((elapsed) + sleep_time)
             print(f'Fetched bucket {bucket_no}/{len(buckets)} in {elapsed*1000:.2f} ms. '
