@@ -27,6 +27,7 @@ async def fetch_item_data(session, url, item_id):
     volumes = [ vol for _, vol in parse_item_volumes(raw_html) ]
 
     data = [ (price[0], price[1], vol) for price, vol in zip(prices, volumes) ]
+    print(data)
     return (item_id, data)
 
 async def fetch(session, url):
@@ -50,7 +51,7 @@ async def main():
 
     database = dataset.connect('sqlite:///osrs_prices.db')
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(requote_redirect_url=False) as session:
         items = await get_item_list(session)
         buckets = [ items[i:i+bucket_size] for i in range(0, len(items) - len(items)%bucket_size, bucket_size) ]
         if len(items) % bucket_size != 0:
